@@ -15,12 +15,52 @@ const ENV = {
   TEAM_DIR: process.env.ACX_TEAM_DIR || path.join(HOME, 'kilo_HQ', '.team'),
   HUB_PORT: parseInt(process.env.ACX_HUB_PORT || '17789', 10),
   HEADED: /^(1|true|yes)$/i.test(process.env.ACX_HEADED || '0'),
-  TIMEOUT: parseInt(process.env.ACX_TIMEOUT || '30000', 10),
-  CHANNEL: process.env.ACX_CHANNEL || 'chromium',
+  TIMEOUT: parseInt(process.env.ACX_TIMEOUT || '20000', 10),
+  TOOL_CAP: Math.min(parseInt(process.env.ACX_TOOL_TIMEOUT || '25000', 10), 28000),
+  IDLE_MS: parseInt(process.env.ACX_IDLE_MS || String(30 * 60 * 1000), 10),
+  CHANNEL: process.env.ACX_CHANNEL || 'auto',
+  VERBOSE: /^(1|true|yes)$/i.test(process.env.ACX_VERBOSE || '0'),
 };
+
+const LOCK_FILE = path.join(ENV.PROFILE_DIR, 'hub.lock');
 
 function log(...args) {
   process.stderr.write(`[hub] ${new Date().toISOString()} ${args.join(' ')}\n`);
+}
+
+function isProcessAlive(pid) {
+  if (!pid || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+function acquireLock() {
+  try {
+    fs.mkdirSync(ENV.PROFILE_DIR, { recursive: true });
+    if (fs.existsSync(LOCK_FILE)) {
+      const pid = parseInt(fs.readFileSync(LOCK_FILE, 'utf8'), 10);
+      if (isProcessAlive(pid)) {
+        log(`ERROR: browser profile is locked by another live hub (PID ${pid}). Kill it (Stop-Process -Id ${pid} -Force) or set ACX_PROFILE_DIR to another directory, then retry.`);
+        process.exit(2);
+      }
+      log(`stale lock (PID ${pid}) from a dead hub - taking over`);
+    }
+    fs.writeFileSync(LOCK_FILE, String(process.pid));
+  } catch (err) {
+    log(`lock warning: ${err.message}`);
+  }
+}
+
+function releaseLock() {
+  try {
+    if (fs.readFileSync(LOCK_FILE, 'utf8').trim() === String(process.pid)) fs.unlinkSync(LOCK_FILE);
+  } catch {
+    // already gone
+  }
 }
 
 async function launchBrowser() {
@@ -121,7 +161,9 @@ function startDashboard(ctx) {
 async function main() {
   log(`profile=${ENV.PROFILE_DIR}`);
   log(`team dir=${ENV.TEAM_DIR}`);
-  log(`headed=${ENV.HEADED} channel=${ENV.CHANNEL} timeout=${ENV.TIMEOUT}ms`);
+  log(`headed=${ENV.HEADED} channel=${ENV.CHANNEL} timeout=${ENV.TIMEOUT}ms toolCap=${ENV.TOOL_CAP}ms idle=${Math.round(ENV.IDLE_MS / 60000)}min`);
+
+  acquireLock();
 
   const { boardPath, screenshotsDir } = ensureBoard(ENV.TEAM_DIR);
   const { context, browserName } = await launchBrowser();
@@ -133,8 +175,10 @@ async function main() {
     screenshotsDir,
     teamDir: ENV.TEAM_DIR,
     timeout: ENV.TIMEOUT,
+    toolCap: ENV.TOOL_CAP,
     version: '1.0.0',
     browserName,
+    verbose: ENV.VERBOSE,
   };
 
   attachConsoleCapture(ctx);
@@ -153,6 +197,8 @@ async function main() {
     version: '1.0.0',
     tools,
     log,
+    verbose: ENV.VERBOSE,
+    toolTimeout: ENV.TOOL_CAP,
   });
 
   let closing = false;
@@ -167,9 +213,32 @@ async function main() {
       log(`context close: ${err.message}`);
     }
     if (dashboard) dashboard.close();
+    releaseLock();
     log('bye');
     process.exit(code);
   }
+
+  context.on('close', () => {
+    if (closing) return;
+    log('browser process exited unexpectedly');
+    releaseLock();
+    process.exit(1);
+  });
+
+  let lastTouch = Date.now();
+  server.onActivity = () => {
+    lastTouch = Date.now();
+  };
+  if (ENV.IDLE_MS > 0) {
+    const idleCheckMs = Math.min(30000, Math.max(1000, Math.floor(ENV.IDLE_MS / 2)));
+    setInterval(() => {
+      if (!closing && Date.now() - lastTouch > ENV.IDLE_MS) {
+        log(`idle for ${Math.round(ENV.IDLE_MS / 60000)}min - shutting down to free the browser`);
+        shutdown(0);
+      }
+    }, idleCheckMs);
+  }
+
   process.on('SIGINT', () => shutdown(0));
   process.on('SIGTERM', () => shutdown(0));
   process.on('SIGBREAK', () => shutdown(0));
@@ -180,7 +249,7 @@ async function main() {
     log(`unhandled rejection: ${err && err.message}`);
   });
 
-  log(`tools registered: ${tools.map((t) => t.name).join(', ')}`);
+  if (ENV.VERBOSE) log(`tools registered: ${tools.map((t) => t.name).join(', ')}`);
   server.start();
 }
 

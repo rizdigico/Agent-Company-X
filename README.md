@@ -95,8 +95,8 @@ Or manually:
 1. Copy `skill/multi-agent-teams/SKILL.md` → `~/.kilocode/skills/multi-agent-teams/SKILL.md`
 2. Copy `agents/*.md` → `~/.config/kilo/agent/`
 3. Copy `command/multi-agent-teams.md` → `~/.kilo/command/` (or `.kilo/command/` in your project)
-4. Merge `config/kilo.jsonc` into your Kilo config — this **replaces the old
-   `playwright-a..e` servers with the single `browser-hub` server** (keep plain
+4. Merge `config/kilo.jsonc` into your Kilo config — this **replaces the old six
+   per-agent Playwright servers with the single `browser-hub` server** (keep plain
    `playwright` for one-off use)
 5. (Optional) Install the `unlimited-research` MCP (see [resources/LINKS.md](resources/LINKS.md))
 6. Reload Kilo.

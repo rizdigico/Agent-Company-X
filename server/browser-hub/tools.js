@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { readdirSync } from 'node:fs';
 import {
   createPage,
   getActiveTab,
@@ -124,7 +125,7 @@ export function createTools(ctx) {
         const agent = requireAgent(params);
         const tabKey = opt(params, 'tabKey', null) || 'main';
         const rec = await createPage(ctx.context, agent, tabKey, opt(params, 'url', null), timeout);
-        return { agent, tabKey, url: rec.page.url(), title: await safeTitle(rec.page) };
+        return { agent, tabKey, url: rec.page.url(), title: await safeTitle(rec.page), warning: rec.warning || null };
       },
     },
     tab_list: {
@@ -135,7 +136,7 @@ export function createTools(ctx) {
       },
       async run(params) {
         const agent = requireAgent(params);
-        return { agent, tabs: await Promise.all(listTabs(agent)) };
+        return { agent, tabs: await listTabs(agent) };
       },
     },
     tab_switch: {
@@ -181,8 +182,18 @@ export function createTools(ctx) {
       },
       async run(params) {
         const page = getActiveTab(requireAgent(params), params.tabKey).page;
-        const resp = await page.goto(params.url, { waitUntil: 'domcontentloaded', timeout });
-        return { url: page.url(), title: await safeTitle(page), status: resp ? resp.status() : null };
+        let resp = null;
+        let warning = null;
+        try {
+          resp = await page.goto(params.url, { waitUntil: 'domcontentloaded', timeout });
+        } catch (err) {
+          if (err && (err.name === 'TimeoutError' || /Timeout/i.test(err.message || ''))) {
+            warning = `goto timed out after ${timeout}ms; page may still be loading`;
+          } else {
+            throw err;
+          }
+        }
+        return { url: page.url(), title: await safeTitle(page), status: resp ? resp.status() : null, warning };
       },
     },
     snapshot: {
@@ -196,7 +207,7 @@ export function createTools(ctx) {
       },
       async run(params) {
         const page = getActiveTab(requireAgent(params), params.tabKey).page;
-        const lines = await page.evaluate(SNAPSHOT_FN);
+        const lines = await bounded(page.evaluate(SNAPSHOT_FN), timeout, 'snapshot');
         return { url: page.url(), title: await safeTitle(page), text: lines.join('\n') };
       },
     },
@@ -312,9 +323,9 @@ export function createTools(ctx) {
         const looksLikeFn = /^(async\s+)?function\b|^\([^)]*\)\s*=>|^[A-Za-z_$][\w$]*\s*=>|^async\s*\(/.test(s);
         if (looksLikeFn) {
           const fn = new Function(`return (${s})`)();
-          return { result: await page.evaluate(fn) };
+          return { result: await bounded(page.evaluate(fn), timeout, 'evaluate') };
         }
-        return { result: await page.evaluate(s) };
+        return { result: await bounded(page.evaluate(s), timeout, 'evaluate') };
       },
     },
     wait_for: {
@@ -330,7 +341,7 @@ export function createTools(ctx) {
       },
       async run(params) {
         const page = getActiveTab(requireAgent(params), params.tabKey).page;
-        const ms = Math.min(opt(params, 'timeoutMs', timeout), 120000);
+        const ms = Math.min(opt(params, 'timeoutMs', timeout), ctx.toolCap);
         if (!params.text) {
           await page.waitForTimeout(ms);
           return { waited: ms };
@@ -402,7 +413,7 @@ export function createTools(ctx) {
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
         const file = `${agent}-${page.__hubKey}-${ts}.png`;
         const abs = path.join(screenshotsDir, file);
-        await page.screenshot({ path: abs, fullPage: !!params.fullPage });
+        await page.screenshot({ path: abs, fullPage: !!params.fullPage, timeout });
         return { file, path: abs, url: `/screenshots/${file}` };
       },
     },
@@ -433,10 +444,12 @@ export function createTools(ctx) {
         required: ['type', 'content'],
       },
       async run(params) {
-        const entry = postToBoard(boardPath, requireAgent(params), params.type, params.content, {
+        const MAX_BODY = 8000;
+        const content = String(params.content).slice(0, MAX_BODY);
+        const entry = postToBoard(boardPath, requireAgent(params), params.type, content, {
           tab: params.tabKey || null,
         });
-        return { id: entry.id, ts: entry.ts, agent: entry.agent };
+        return { id: entry.id, ts: entry.ts, agent: entry.agent, truncated: String(params.content).length > MAX_BODY };
       },
     },
     board_read: {
@@ -522,21 +535,37 @@ export function createTools(ctx) {
 
 function countFiles(dir) {
   try {
-    return require('node:fs').readdirSync(dir).length;
+    return readdirSync(dir).length;
   } catch {
     return 0;
   }
 }
 
+const TITLE_RACE_MS = 2500;
+
+function bounded(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function safeTitle(page) {
   try {
-    return await page.title();
+    return await Promise.race([
+      page.title(),
+      new Promise((resolve) => setTimeout(() => resolve(''), TITLE_RACE_MS)),
+    ]);
   } catch {
     return '';
   }
 }
 
 export function attachConsoleCapture(ctx) {
+  const verbose = !!ctx.verbose;
   for (const page of ctx.context.pages()) {
     if (!page.__hubConsole) page.__hubConsole = [];
     page.removeAllListeners('console');
@@ -545,7 +574,7 @@ export function attachConsoleCapture(ctx) {
       if (!page.__hubConsole) page.__hubConsole = [];
       page.__hubConsole.push({ ts: new Date().toISOString(), level: msg.type(), text });
       if (page.__hubConsole.length > 200) page.__hubConsole.shift();
-      if (msg.type() === 'error' || msg.type() === 'warning') {
+      if (verbose && (msg.type() === 'error' || msg.type() === 'warning')) {
         process.stderr.write(`[console:${page.__hubAgent || '?'}] ${msg.type()}: ${text.slice(0, 500)}\n`);
       }
     });

@@ -5,32 +5,35 @@ export function ensureAgent(agent) {
   return TABS.get(agent);
 }
 
-export function createPage(context, agent, tabKey, url, timeout) {
+export async function createPage(context, agent, tabKey, url, timeout) {
   const agentTabs = ensureAgent(agent);
   if (agentTabs.has(tabKey)) {
     throw new Error(`agent "${agent}" already owns tab "${tabKey}". Use tab_list to see your tabs, or pick a unique tabKey.`);
   }
-  return context.newPage().then((page) => {
-    page.__hubAgent = agent;
-    page.__hubKey = tabKey;
-    const rec = { page, active: true, openedAt: new Date().toISOString() };
-    for (const [, other] of agentTabs) other.active = false;
-    agentTabs.set(tabKey, rec);
-    page.on('close', () => {
-      if (agentTabs.get(tabKey)?.page === page) agentTabs.delete(tabKey);
-    });
-    if (url) {
-      return page.goto(url, { waitUntil: 'domcontentloaded', timeout }).then(
-        () => rec,
-        (err) => {
-          page.close().catch(() => {});
-          agentTabs.delete(tabKey);
-          throw err;
-        }
-      );
-    }
-    return rec;
+  const page = await context.newPage();
+  page.__hubAgent = agent;
+  page.__hubKey = tabKey;
+  const rec = { page, active: true, openedAt: new Date().toISOString(), warning: null };
+  for (const [, other] of agentTabs) other.active = false;
+  agentTabs.set(tabKey, rec);
+  page.on('close', () => {
+    if (agentTabs.get(tabKey)?.page === page) agentTabs.delete(tabKey);
   });
+  if (url) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
+    } catch (err) {
+      const msg = err && err.message ? err.message : String(err);
+      if (err && err.name === 'TimeoutError') {
+        rec.warning = `initial goto timed out after ${timeout}ms; page may still be loading`;
+      } else if (/net::ERR|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED/i.test(msg)) {
+        rec.warning = msg.split('\n')[0];
+      } else {
+        rec.warning = msg.split('\n')[0];
+      }
+    }
+  }
+  return rec;
 }
 
 export function getTab(agent, tabKey) {
@@ -75,16 +78,33 @@ export function closeTab(agent, tabKey) {
   return rec.page.close().then(() => ({ agent, tabKey, closed: true }));
 }
 
-export function listTabs(agent) {
+const TITLE_RACE_MS = 2500;
+
+async function boundedTitle(page) {
+  try {
+    return await Promise.race([
+      page.title(),
+      new Promise((resolve) => setTimeout(() => resolve(''), TITLE_RACE_MS)),
+    ]);
+  } catch {
+    return '';
+  }
+}
+
+export async function listTabs(agent) {
   const agentTabs = TABS.get(agent);
   if (!agentTabs || agentTabs.size === 0) return [];
-  return [...agentTabs.entries()].map(([tabKey, rec]) => ({
-    tabKey,
-    active: rec.active,
-    openedAt: rec.openedAt,
-    url: rec.page.url(),
-    title: rec.page.title().catch(() => ''),
-  }));
+  const out = [];
+  for (const [tabKey, rec] of agentTabs) {
+    out.push({
+      tabKey,
+      active: rec.active,
+      openedAt: rec.openedAt,
+      url: rec.page.url(),
+      title: await boundedTitle(rec.page),
+    });
+  }
+  return out;
 }
 
 export function allAgents() {

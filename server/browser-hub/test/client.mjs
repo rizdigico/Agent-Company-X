@@ -64,12 +64,12 @@ function check(label, cond, detail = '') {
   if (!ok) failures++;
 }
 
-function startHub(extraEnv = {}) {
-  const teamDir = path.join(process.env.TEMP || '.', `acx-test-team-${Date.now()}`);
+function startHub(dirs, extraEnv = {}) {
+  const teamDir = dirs.teamDir;
   const proc = spawn(process.execPath, [HUB], {
     env: {
       ...process.env,
-      ACX_PROFILE_DIR: path.join(process.env.TEMP || '.', `acx-test-profile-${Date.now()}`),
+      ACX_PROFILE_DIR: dirs.profileDir,
       ACX_TEAM_DIR: teamDir,
       ACX_HUB_PORT: '0',
       ACX_HEADED: '0',
@@ -84,7 +84,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
   console.log('=== ACX browser-hub smoke test ===');
-  const { proc, teamDir, client } = startHub();
+  const profileDir = path.join(process.env.TEMP || '.', `acx-test-profile-${Date.now()}`);
+  const teamDir = path.join(process.env.TEMP || '.', `acx-test-team-${Date.now()}`);
+  const { proc, client } = startHub({ profileDir, teamDir });
   await sleep(1500);
 
   try {
@@ -163,11 +165,12 @@ async function main() {
   }
 
   const { teamDir: td } = { teamDir };
+  const profileDir2 = path.join(process.env.TEMP || '.', `acx-test-profile-${Date.now()}`);
 
   const proc2 = spawn(process.execPath, [HUB], {
     env: {
       ...process.env,
-      ACX_PROFILE_DIR: path.join(process.env.TEMP || '.', `acx-test-profile-${Date.now()}`),
+      ACX_PROFILE_DIR: profileDir2,
       ACX_TEAM_DIR: td,
       ACX_HUB_PORT: '0',
       ACX_HEADED: '0',
@@ -187,6 +190,10 @@ async function main() {
     failures++;
   } finally {
     client2.close();
+    await sleep(300);
+    for (const d of [profileDir, teamDir, profileDir2]) {
+      try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
+    }
   }
 
   console.log(`\n${failures === 0 ? 'ALL TESTS PASSED' : `${failures} TEST(S) FAILED`}`);

@@ -22,56 +22,85 @@ export function resolvePlaywright() {
   }
 }
 
+const CRLFCRLF = Buffer.from('\r\n\r\n');
+
 export class McpServer {
-  constructor({ name, version, tools, log }) {
+  constructor({ name, version, tools, log, verbose = false, toolTimeout = 25000 }) {
     this.name = name;
     this.version = version;
     this.tools = tools;
     this.log = log || (() => {});
-    this.buffer = '';
-    this.requestId = 0;
+    this.verbose = !!verbose;
+    this.toolTimeout = toolTimeout;
+    this.buf = Buffer.alloc(0);
+    this.lastActivity = Date.now();
+    this.onActivity = null;
+  }
+
+  touch() {
+    this.lastActivity = Date.now();
+    if (this.onActivity) this.onActivity();
   }
 
   start() {
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk) => this._onData(chunk));
+    process.stdin.on('data', (chunk) => {
+      this.touch();
+      this._onData(Buffer.from(chunk));
+    });
     process.stdin.on('end', () => this._exit(0));
     process.stdin.on('error', () => this._exit(1));
+    process.stdin.on('close', () => this._exit(0));
+    process.stdout.on('error', () => {});
   }
 
   _onData(chunk) {
-    this.buffer += chunk;
+    this.buf = Buffer.concat([this.buf, chunk]);
     for (;;) {
-      const idx = this.buffer.indexOf('\r\n\r\n');
+      const idx = this.buf.indexOf(CRLFCRLF);
       if (idx === -1) return;
-      const header = this.buffer.slice(0, idx);
+      const header = this.buf.slice(0, idx).toString('utf8');
       const match = /Content-Length:\s*(\d+)/i.exec(header);
       if (!match) {
-        this.buffer = this.buffer.slice(idx + 4);
+        this.buf = this.buf.slice(idx + 4);
         continue;
       }
       const len = parseInt(match[1], 10);
-      if (this.buffer.length < idx + 4 + len) return;
-      const body = this.buffer.slice(idx + 4, idx + 4 + len);
-      this.buffer = this.buffer.slice(idx + 4 + len);
-      this._handle(JSON.parse(body));
+      if (this.buf.length < idx + 4 + len) return;
+      const body = this.buf.slice(idx + 4, idx + 4 + len);
+      this.buf = this.buf.slice(idx + 4 + len);
+      let msg;
+      try {
+        msg = JSON.parse(body.toString('utf8'));
+      } catch (err) {
+        this._send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: `Parse error: ${err.message}` } });
+        continue;
+      }
+      this._handle(msg);
     }
   }
 
   _send(msg) {
-    const json = JSON.stringify(msg);
-    const out = `Content-Length: ${Buffer.byteLength(json, 'utf8')}\r\n\r\n${json}`;
-    this.log(`[mcp] <- id=${msg.id ?? '-'} bytes=${Buffer.byteLength(out, 'utf8')}`);
-    process.stdout.write(out);
+    let out;
+    try {
+      const json = JSON.stringify(msg);
+      out = `Content-Length: ${Buffer.byteLength(json, 'utf8')}\r\n\r\n${json}`;
+    } catch (err) {
+      out = `Content-Length: 0\r\n\r\n`;
+    }
+    if (this.verbose) this.log(`[mcp] <- id=${msg.id ?? '-'} bytes=${Buffer.byteLength(out, 'utf8')}`);
+    try {
+      process.stdout.write(out);
+    } catch {
+      // client gone
+    }
   }
 
   _handle(msg) {
     if (!msg || typeof msg !== 'object' || !msg.method) return;
     const { id, method, params } = msg;
-    this.log(`[mcp] -> ${method} id=${id ?? '-'}`);
+    if (this.verbose) this.log(`[mcp] -> ${method} id=${id ?? '-'}`);
 
     if (method === 'notifications/initialized' || method === 'initialized') {
-      this.log('[mcp] client initialized');
       return;
     }
 
@@ -84,7 +113,7 @@ export class McpServer {
 
     if (method === 'initialize') {
       const requested = (params && params.protocolVersion) || '2024-11-05';
-      this.log(`[mcp] initialize (protocol ${requested})`);
+      if (this.verbose) this.log(`[mcp] initialize (protocol ${requested})`);
       respond({
         protocolVersion: requested,
         capabilities: { tools: { listChanged: false } },
@@ -99,7 +128,6 @@ export class McpServer {
     }
 
     if (method === 'tools/list') {
-      this.log(`[mcp] tools/list requested`);
       respond({
         tools: this.tools.map((t) => ({
           name: t.name,
@@ -117,19 +145,7 @@ export class McpServer {
         fail(-32602, `Unknown tool: ${name}`);
         return;
       }
-      Promise.resolve()
-        .then(() => tool.run(args || {}))
-        .then((result) => {
-          const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-          respond({ content: [{ type: 'text', text }] });
-        })
-        .catch((err) => {
-          this.log(`[mcp] tool ${name} failed: ${err.message}`);
-          respond({
-            content: [{ type: 'text', text: `ERROR: ${err.message}` }],
-            isError: true,
-          });
-        });
+      this._runTool(tool, args || {}, respond, fail);
       return;
     }
 
@@ -144,8 +160,42 @@ export class McpServer {
       return;
     }
 
-    this.log(`[mcp] unhandled method: ${method}`);
+    if (this.verbose) this.log(`[mcp] unhandled method: ${method}`);
     fail(-32601, `Method not found: ${method}`);
+  }
+
+  _runTool(tool, args, respond, fail) {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+
+    Promise.resolve()
+      .then(() => tool.run(args))
+      .then(
+        (result) => {
+          let text;
+          try {
+            text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+          } catch (err) {
+            text = `ERROR: result not serializable: ${err.message}`;
+          }
+          finish(respond, { content: [{ type: 'text', text }] });
+        },
+        (err) => {
+          const msg = err && err.message ? err.message : String(err);
+          finish(respond, { content: [{ type: 'text', text: `ERROR: ${msg}` }], isError: true });
+        }
+      );
+
+    const timer = setTimeout(() => {
+      const msg = `Operation timed out after ${this.toolTimeout}ms (tool ${tool.name})`;
+      this.log(`[mcp] ${msg}`);
+      finish(respond, { content: [{ type: 'text', text: `ERROR: ${msg}` }], isError: true });
+    }, this.toolTimeout);
   }
 
   _exit(code) {

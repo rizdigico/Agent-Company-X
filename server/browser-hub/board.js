@@ -30,7 +30,7 @@ function writeBoard(boardPath, entries) {
 }
 
 export function postToBoard(boardPath, agent, type, content, extra = {}) {
-  const entries = readBoard(boardPath);
+  let entries = readBoard(boardPath);
   const entry = {
     id: crypto.randomUUID().slice(0, 8),
     ts: new Date().toISOString(),
@@ -40,6 +40,7 @@ export function postToBoard(boardPath, agent, type, content, extra = {}) {
     ...extra,
   };
   entries.push(entry);
+  if (entries.length > 500) entries = entries.slice(-500);
   writeBoard(boardPath, entries);
   return entry;
 }
@@ -74,10 +75,17 @@ export function dashboardHtml(teamDir, boardPath, screenshotsDir, port) {
   const screenshots = fs.existsSync(screenshotsDir)
     ? fs.readdirSync(screenshotsDir).filter((f) => /\.(png|jpe?g)$/i.test(f)).sort().reverse()
     : [];
+  const esc = (s) => String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/\n/g, '<br>');
   const rows = entries
     .map((e) => {
-      const safe = String(e.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
-      return `<tr><td class="ts">${e.ts}</td><td class="agent a-${e.agent.replace(/[^a-zA-Z0-9_-]/g, '')}">${e.agent}</td><td class="type t-${e.type.replace(/[^a-zA-Z0-9_-]/g, '')}">${e.type}</td><td>${safe}</td></tr>`;
+      const a = esc(e.agent);
+      const t = esc(e.type);
+      return `<tr><td class="ts">${esc(e.ts)}</td><td class="agent a-${e.agent.replace(/[^a-zA-Z0-9_-]/g, '')}">${a}</td><td class="type t-${e.type.replace(/[^a-zA-Z0-9_-]/g, '')}">${t}</td><td>${esc(e.content)}</td></tr>`;
     })
     .join('\n');
   const thumbs = screenshots
@@ -86,7 +94,7 @@ export function dashboardHtml(teamDir, boardPath, screenshotsDir, port) {
   const agentStats = {};
   for (const e of entries) agentStats[e.agent] = (agentStats[e.agent] || 0) + 1;
   const stats = Object.entries(agentStats)
-    .map(([a, n]) => `<span class="pill">${a}: ${n}</span>`)
+    .map(([a, n]) => `<span class="pill">${esc(a)}: ${n}</span>`)
     .join(' ');
   return `<!doctype html>
 <html lang="en">

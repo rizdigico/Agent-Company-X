@@ -1,4 +1,0 @@
-- from: worker-e
-- tool_prefix_used: playwright-e_*
-- page_title: Example Domain
-- status: done

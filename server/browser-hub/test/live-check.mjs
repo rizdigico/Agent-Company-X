@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -71,6 +72,8 @@ async function main() {
     console.log('=== live-install check: hub (temp profile/team) ===');
   }
 
+  const tmpDirs = useRealEnv ? [] : [env.ACX_PROFILE_DIR, env.ACX_TEAM_DIR];
+
   const proc = spawn(process.execPath, [HUB], { env, stdio: ['pipe', 'pipe', 'pipe'] });
   proc.stderr.setEncoding('utf8');
   let bootLog = '';
@@ -100,6 +103,9 @@ async function main() {
   }
   await sleep(400);
   if (/browser launched/.test(bootLog)) console.log('PASS browser launched (log)');
+  for (const d of tmpDirs) {
+    try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
+  }
   if (ok) console.log('\nINSTALL VERIFIED');
   else console.log('\nINSTALL CHECK FAILED');
   process.exit(ok ? 0 : 1);

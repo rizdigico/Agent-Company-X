@@ -66,12 +66,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function main() {
   console.log('=== ACX heavy test: parallel agents, one browser, veto loop ===');
   const teamDir = path.join(process.env.TEMP || '.', `acx-heavy-team-${Date.now()}`);
+  const profileDir = path.join(process.env.TEMP || '.', `acx-heavy-profile-${Date.now()}`);
   const deliverDir = path.join(teamDir, 'deliverables');
   fs.mkdirSync(deliverDir, { recursive: true });
   const proc = spawn(process.execPath, [HUB], {
     env: {
       ...process.env,
-      ACX_PROFILE_DIR: path.join(process.env.TEMP || '.', `acx-heavy-profile-${Date.now()}`),
+      ACX_PROFILE_DIR: profileDir,
       ACX_TEAM_DIR: teamDir,
       ACX_HUB_PORT: '0',
       ACX_HEADED: '0',
@@ -171,6 +172,10 @@ async function main() {
     failures++;
   } finally {
     client.close();
+    await sleep(300);
+    for (const d of [profileDir, teamDir]) {
+      try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
+    }
   }
 
   console.log(`\n${failures === 0 ? 'ALL TESTS PASSED' : `${failures} TEST(S) FAILED`}`);

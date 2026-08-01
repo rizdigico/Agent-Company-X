@@ -1,8 +1,8 @@
 # STRESS-TESTS — Agent-Company-X Verification Evidence
 
-This file documents the stress tests run against the system. The old evidence files in
-`docs/stress-test-evidence/` cover the pre-hub design (per-agent playwright-a..e isolated
-browsers) and are **superseded** by the single-browser hub architecture.
+This file documents the stress tests run against the system. Evidence files from the
+pre-hub design (per-agent playwright servers with separate profiles) were removed when
+the single-browser hub architecture replaced them.
 
 ## Test suites
 
@@ -54,11 +54,39 @@ Proves the live install boots cleanly on this machine.
 
 Run: `node server\browser-hub\test\live-check.mjs [--real]`
 
-### 4. Config/permission audit (planned — before each release)
+### 4. Slow-page + parallel-load stress (passing — 2026-08-01)
+
+`server\browser-hub\test\slow-load.mjs` proves no tool call can exceed the client's 30s
+cap, even under slow or hanging pages. Uses a local throttled HTTP server (8s-delay
+route, never-responding route) and `ACX_TIMEOUT=15000` / `ACX_TOOL_TIMEOUT=20000`:
+
+- **Parallel `tab_new` to a slow page (8s delay), 3 agents at once** — completes at the
+  goto bound (15.2s), no client timeout.
+- **`tab_new` to a hanging page** — returns partial state with
+  `warning: initial goto timed out after 15000ms; page may still be loading`, not an
+  orphaned 30s hang.
+- **`tab_list` with hung titles** — `boundedTitle` caps the title race at 2.5s (7ms
+  observed), titles always strings.
+- **`evaluate` of a never-resolving async function** — bounded at the goto timeout
+  (15s), surfaces `evaluate timed out after 15000ms`.
+- **`wait_for` with a 60s requested timeout** — capped at the tool cap (20s), never
+  runs the full 60s.
+- **8-way parallel mixed storm** (navs, snapshots, board traffic, evaluate) — all 8
+  settle in 8.3s; hub stays responsive; board intact.
+
+Result: every observed call stayed under 30s (max 20s). This is the regression guard for
+the timeout-bug family that previously caused client-side "Operation timed out after
+30000ms" errors.
+
+Run: `node server\browser-hub\test\slow-load.mjs`
+
+### 5. Config/permission audit (verified — 2026-08-01)
 
 - All agents resolve to ALL ALLOW (no ask/deny) — verified against the live config.
-- `kilo agent list` shows every agent; no orphaned playwright-a..e servers remain in the
-  live kilo.jsonc.
+- The live config contains exactly four MCP servers: `browser-hub`,
+  `unlimited-research`, `agentmemory`, `playwright` — no per-agent playwright servers
+  remain in any config, agent file, skill, command, or cache dir.
+- No orphaned `playwright-a..e` processes or browser profiles found.
 
 ## Running the tests
 
