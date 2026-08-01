@@ -98,6 +98,43 @@ The system runs to completion autonomously and reports back with deliverables + 
 
 ---
 
+## Modes: code mode and orchestrator mode both work
+
+The command file has `agent: orchestrator` in its frontmatter, so **`/multi-agent-teams <goal>` routes to the orchestrator agent from any mode**. You do not need to be in orchestrator mode.
+
+- **Code mode (or ask/plan/debug):** type `/multi-agent-teams <goal>`. Kilo switches to the orchestrator agent, which plans and dispatches worker subagents via the `task` tool — all inside your current session. This is the normal way to run it.
+- **Orchestrator mode:** the orchestrator is already the active agent. Same behavior, plus one extra capability: the orchestrator and each worker (`mode: subagent`, `task: allow`) can spawn their **own** sub-agents. For very large projects you get nested teams — an "army" — with the orchestrator at the top coordinating worker teams that each fan out further. The veto loop and message board work the same at every level.
+
+Both modes share the same session, protocol, and deliverable flow.
+
+## Runs in one session — no session explosion
+
+Everything runs **inside the single session you're already in**:
+
+- The `/multi-agent-teams` command does **not** launch new `kilo` processes or new sessions.
+- Worker agents are **subagents** spawned through the built-in `task` tool. They appear as "agents loading" in your current session (as you saw during testing), not as new `/sessions` entries.
+- Sub-sub-agents (nested teams) follow the same rule — `task` subagents, no new CLI sessions.
+- The message board (`.team/inbox` / `.team/outbox`) is just files on disk, so coordination needs no extra sessions either.
+
+The only thing that ever creates a new session entry is intentionally starting one (`kilo -s`, headless `kilo run`, `/new`).
+
+## Per-agent models
+
+Yes — each agent can run on a **different model**, set in the agent file's frontmatter:
+
+```yaml
+---
+description: Team worker Agent B - Research + Visuals
+mode: subagent
+model: provider/model-id   # <-- per-agent model override
+permission: ...
+---
+```
+
+The orchestrator could run on a strong reasoning model, Agent A/B on a fast cheap model for scraping/research, Agents C/D on whatever is good at documents, and Agent E on a rigorous verifier — all in one team run. See [config/MODELS.md](config/MODELS.md) for a worked example and guidance on choosing models by role (speed / intelligence / quota).
+
+---
+
 ## How it satisfies your requirements
 
 | Requirement | Mechanism |
