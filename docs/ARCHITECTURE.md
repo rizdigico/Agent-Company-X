@@ -1,77 +1,100 @@
-# Architecture
+# Architecture — Agent-Company-X
 
-## Overview
-
-The Multi-Agent Teams system turns a single goal into a self-running team of subagents that plan, source, research, build, and verify — then deliver only when 100% verified. It is designed to be CLI-agnostic: the *skill* is the brain, the *agents* are the workers, the *protocol* is the communication contract, and per-CLI *configs* adapt it to the host (Kilo today, Codex/Claude Code/OpenCode via forks).
-
-## Components
+## System overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      SKILL (the brain)                      │
-│   skill/multi-agent-teams/SKILL.md                          │
-│   - operating contract (no prompts, no stops, goal-driven)  │
-│   - team roster + browser bindings                          │
-│   - the 8-step loop (plan→size→dispatch→collect→build→      │
-│     verify→fix→deliver)                                     │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ loads
-┌──────────────────────────────▼──────────────────────────────┐
-│                   ORCHESTRATOR (primary)                    │
-│   agents/orchestrator.md                                    │
-│   - plans, assigns, dispatches, collects, verifies, delivers│
-│   - keeps worker task_ids (idle agents standby for re-do)   │
-└──────────┬──────────┬──────────┬──────────┬──────────┬──────┘
-           │          │          │          │          │
-     ┌─────▼──┐ ┌─────▼───┐ ┌────▼───┐ ┌────▼───┐ ┌────▼────┐
-     │ Agent A│ │ Agent B │ │Agent C │ │Agent D │ │ Agent E │
-     │Scout/  │ │Research │ │Builder │ │Builder │ │Verify/  │
-     │Source  │ │+Visuals │ │(report)│ │(slides)│ │Veto     │
-     │pw-a    │ │pw-b     │ │pw-c    │ │pw-d    │ │pw-e     │
-     └───┬────┘ └───┬─────┘ └───┬────┘ └───┬────┘ └────┬────┘
-         │          │           │          │           │
-         └──────────┴───A2A message board (inbox/outbox)──┘
-                        protocol/TEAM_PROTOCOL.md
+                        +---------------------+
+                        |    YOU (boss)       |
+                        | /multi-agent-teams  |
+                        +----------+----------+
+                                   | goal
+                                   v
+                        +---------------------+
+                        |   ORCHESTRATOR      |  fixed layer (opencode/deepseek-v4-flash-free)
+                        |  plan / dispatch /  |
+                        |  judge / deliver    |
+                        +----------+----------+
+                                   | spawns subagents (task tool), reads/writes board
+        +--------------+-----------+----------+------------------+
+        |              |                      |                  |
+        v              v                      v                  v
+   +---------+    +---------+            +---------+      +-----------------+
+   |worker-a |    |worker-b |            |worker-e |      |  swarms:        |
+   | scout   |    | research|            | verifier|      |  worker -> sub- |
+   | (browser|    | +visuals|            | (veto,  |      |  subagents      |
+   |  heavy) |    |         |            |  fixed) |      |  (worker-a:sub1 |
+   +----+----+    +----+----+            +----+----+      |   ...)          |
+        |              |                      |           +-----------------+
+        |              |                      |
+        +--------+-----+----------+-----------+
+                 v                v
+        +---------------------+  +-----------------------+
+        |  SHARED BROWSER     |  |  THE BOARD (A2A bus)  |
+        |  browser-hub MCP    |  |  board.json           |
+        |  one profile,       |  |  run.json (manifest)  |
+        |  per-agent tabs     |  |  dashboard :17789     |
+        |  (server-enforced)  |  |  screenshots/         |
+        +---------------------+  +-----------------------+
 ```
+
+Two **fixed layers** (must exist in every run):
+1. **Orchestrator** — plans, dispatches, judges, delivers.
+2. **Verifier** — independent veto on all deliverables (different model family).
+
+Everything else (workers, tools, browser use, flow, models, swarm size) is **configured
+per run** by the orchestrator at Step 0 of the skill.
+
+## Browser hub internals (`server/browser-hub/`)
+
+| Module | Responsibility |
+|---|---|
+| `hub.mjs` | Entrypoint. Env/config (`ACX_*`), browser selection (bundled → Edge → Chrome), persistent context launch, dashboard HTTP server, MCP stdio lifecycle. |
+| `mcp.js` | Hand-rolled MCP stdio server over Content-Length-framed JSON-RPC. Resolves `playwright-core` from its own `node_modules` first, then `@playwright/mcp`'s node_modules, then `ACX_PW_PATH`. |
+| `tabs.js` | Ownership registry: `Map<agent, Map<tabKey, Page>>`. `tab_new` binds `agent`; every operation validates ownership server-side and rejects foreign tabKeys. |
+| `tools.js` | The 25 tool handlers. DOM snapshot engine (walking roles/names/states — `page.accessibility` was removed in Playwright), navigation, click/fill/type/select/evaluate, screenshots, board ops, run manifest. |
+| `board.js` | `board.json` (A2A message bus, last 200), `run.json` (run_start/run_status manifest), screenshots dir, dashboard HTML (auto-refresh 3s, per-agent pills). |
+| `test/client.mjs` | End-to-end smoke test — a clean-room MCP client verifying initialize, tool registration, tab isolation, ownership enforcement, board persistence across restart. |
+
+Key invariants:
+
+- **One browser process.** `chromium.launchPersistentContext(PROFILE_DIR)` — Chromium
+  allows one process per user-data-dir, so there is exactly one real browser; agents
+  share it by tab, never by process.
+- **Ownership is server-side.** `tabs.js` enforces it; prompts only document it. A foreign
+  tabKey yields `agent "<x>" does not own tab "<key>"`.
+- **Byte-correct framing.** The hub writes Content-Length in **bytes**; the smoke-test
+  clients read bytes via `Buffer.indexOf(Buffer.from('\r\n\r\n'))` (char-based slicing
+  corrupts non-ASCII payloads).
+- **Browser fallback chain.** No bundled chromium revision match → `ACX_CHANNEL=msedge` →
+  `chrome`; on Windows the hub launches Edge (already installed) or Chrome. The profile
+  persists across restarts, so logins survive.
+- **Board is the only shared surface.** No direct subagent messaging; the board file is
+  the bus and the orchestrator is the hub. This is deliberate — it sidesteps
+  session/process explosion and works across any CLI.
+
+## Session model
+
+One user session. Orchestrator + workers + verifier are **subagents** (task tool);
+swarms are sub-subagents. No new `kilo` processes, no new sessions, no session
+explosion. The board is files on disk, so coordination has no coupling to sessions.
 
 ## Data flow
 
-1. **Goal in** → orchestrator loads skill, writes todo list, sizes team.
-2. **A + B dispatch** (parallel): A scrapes/sources materials; B researches (unlimited-research) and creates visuals (browser image-gen).
-3. **C + D dispatch** (parallel): C builds report, D builds slides, using A+B outputs from the outbox.
-4. **E dispatch**: opens deliverables, verifies against the exact goal, returns PASS or defect list (veto).
-5. **Fix loop**: orchestrator resumes the responsible agent (via `task_id`) → fix → E re-verifies. Loops until PASS.
-6. **Deliver**: orchestrator collects final deliverables, reports to user with full brief.
+1. Orchestrator reads goal → plans → posts tasks to board → dispatches workers.
+2. Workers read their task (board) → use browser-hub (own tabs) + research/build tools →
+   post `result` with deliverable path.
+3. Orchestrator collects results → passes final deliverables + goal to verifier.
+4. Verifier opens each deliverable (browser-hub for rendered things, officecli/design
+   studio for native files), posts `veto` PASS or a numbered defect list.
+5. On veto: orchestrator routes fix to the responsible idle agent → repeat until PASS.
+6. Deliver: final deliverables + full brief.
 
-## Communication (A2A)
+## Config surface
 
-No direct agent-to-agent messaging exists in the host CLIs; the orchestrator is the hub. A2A is emulated with a **file message board**:
+- `config/kilo.jsonc` — the single `browser-hub` MCP server, permissions (`*: allow`,
+  `browser-hub_*: allow`).
+- `config/MODELS.md` — free-model pool and per-agent assignments.
+- `agents/*.md` — frontmatter `model`, `permission`, role description.
 
-- `C:\Users\aariz\kilo_HQ\.team\inbox\<agent>-<seq>.md` — directed messages
-- `C:\Users\aariz\kilo_HQ\.team\outbox\<agent>-<seq>.md` — results/deliverables
-- Header convention: `from` / `to` / `seq` / `status`.
-- Workers resume via saved `task_id` instead of respawning (preserves context = the "idle standby" semantics).
-
-## Browser isolation
-
-Six Playwright MCP servers (`playwright`, `playwright-a..e`), each launched with a unique persistent `--user-data-dir` under `~/.cache/kilo/`. The orchestrator enforces per-agent binding by system prompt; no agent ever touches another's server.
-
-## Permissions (zero prompts)
-
-- Every tool allowed via explicit per-key `allow` in `kilo.jsonc` (global `permission` + each `agent.<name>.permission`).
-- Rationale: a bare `"*": {"*": "allow"}` wildcard is overridden by built-in deny/ask rules that merge *after* it; explicit keys win. All MCP tool patterns (`playwright-*_*`, `unlimited-research_*`, `agentmemory_*`) are explicitly allowed.
-- Verified: `kilo agent list` shows ALL ALLOW for every user-facing agent.
-
-## Reliability properties
-
-- **No single point of failure at runtime**: if a worker fails, the orchestrator retries or resumes it.
-- **Verification is mandatory**: Agent E has absolute veto; nothing ships unverified.
-- **Deterministic teardown**: Playwright MCP servers are session-scoped; they die with the session (no lingering browser processes).
-- **Config drift protection**: install scripts + FORKING checklist keep fork parity.
-
-## Design constraints discovered (Kilo 7.4.x)
-
-- Agent/command markdown files with YAML frontmatter **must be UTF-8 BOM** on Windows (`Set-Content -Encoding UTF8`); BOM-less files fail with `No context found for instance`.
-- `mcp:` frontmatter on agents is ignored — browser binding is enforced via system prompt.
-- `compaction`/`summary`/`title` are binary-hardcoded system agents; they ignore config and file overrides but are pure-text and never prompt.
-- Free-model daily quotas can throttle heavy runs; the system works on any model, but plan token budget for big teams.
+Hub env vars: `ACX_PROFILE_DIR`, `ACX_TEAM_DIR`, `ACX_HUB_PORT` (17789), `ACX_HEADED`,
+`ACX_TIMEOUT`, `ACX_CHANNEL` (auto|chromium|msedge|chrome), `ACX_PW_PATH`.

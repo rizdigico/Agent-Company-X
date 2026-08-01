@@ -4,39 +4,31 @@
     "auto_load": true
   },
   "mcp": {
+    "browser-hub": {
+      "type": "local",
+      "command": ["node", "C:\\Users\\aariz\\kilo_HQ\\multi-agent-teams\\server\\browser-hub\\hub.mjs"],
+      "env": {
+        "ACX_PROFILE_DIR": "C:\\Users\\aariz\\.cache\\kilo\\agent-company\\profile",
+        "ACX_TEAM_DIR": "C:\\Users\\aariz\\kilo_HQ\\.team",
+        "ACX_HUB_PORT": "17789",
+        "ACX_HEADED": "0"
+      },
+      "enabled": true
+    },
     "playwright": {
       "type": "local",
       "command": ["npx", "-y", "@playwright/mcp", "--headless"],
       "enabled": true
     },
-    "playwright-a": {
-      "type": "local",
-      "command": ["npx", "-y", "@playwright/mcp", "--headless", "--user-data-dir", "C:\\Users\\aariz\\.cache\\kilo\\playwright-a"],
-      "enabled": true
-    },
-    "playwright-b": {
-      "type": "local",
-      "command": ["npx", "-y", "@playwright/mcp", "--headless", "--user-data-dir", "C:\\Users\\aariz\\.cache\\kilo\\playwright-b"],
-      "enabled": true
-    },
-    "playwright-c": {
-      "type": "local",
-      "command": ["npx", "-y", "@playwright/mcp", "--headless", "--user-data-dir", "C:\\Users\\aariz\\.cache\\kilo\\playwright-c"],
-      "enabled": true
-    },
-    "playwright-d": {
-      "type": "local",
-      "command": ["npx", "-y", "@playwright/mcp", "--headless", "--user-data-dir", "C:\\Users\\aariz\\.cache\\kilo\\playwright-d"],
-      "enabled": true
-    },
-    "playwright-e": {
-      "type": "local",
-      "command": ["npx", "-y", "@playwright/mcp", "--headless", "--user-data-dir", "C:\\Users\\aariz\\.cache\\kilo\\playwright-e"],
-      "enabled": true
-    },
     "unlimited-research": {
       "type": "local",
       "command": ["python", "C:\\Users\\aariz\\kilo_HQ\\unlimited-research-engine\\engine\\mcp_research_server.py"],
+      "enabled": true
+    },
+    "agentmemory": {
+      "type": "local",
+      "command": ["npx", "-y", "@agentmemory/mcp"],
+      "env": { "AGENTMEMORY_URL": "http://localhost:3111" },
       "enabled": true
     }
   },
@@ -49,8 +41,7 @@
     "question": "allow", "doom_loop": "allow", "suggest": "allow",
     "interactive_terminal": "allow", "plan_enter": "allow", "plan_exit": "allow",
     "repo_clone": "allow", "repo_overview": "allow", "recall": "allow",
-    "playwright_*": "allow", "playwright-a_*": "allow", "playwright-b_*": "allow",
-    "playwright-c_*": "allow", "playwright-d_*": "allow", "playwright-e_*": "allow",
+    "browser-hub_*": "allow", "playwright_*": "allow",
     "unlimited-research_*": "allow", "agentmemory_*": "allow",
     "*": { "*": "allow" }
   }

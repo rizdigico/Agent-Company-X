@@ -1,0 +1,20 @@
+{
+  "name": "agent-company-browser-hub",
+  "version": "1.0.0",
+  "description": "Agent-Company-X browser hub: ONE persistent browser, per-agent tab ownership, team board. MCP stdio server.",
+  "main": "hub.mjs",
+  "type": "module",
+  "bin": {
+    "agent-company-browser-hub": "./hub.mjs"
+  },
+  "scripts": {
+    "start": "node hub.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "playwright-core": "^1.49.0"
+  },
+  "license": "MIT"
+}
