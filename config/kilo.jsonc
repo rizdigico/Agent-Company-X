@@ -1,0 +1,57 @@
+{
+  "skills": {
+    "paths": ["~/.kilocode/skills"],
+    "auto_load": true
+  },
+  "mcp": {
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp", "--headless"],
+      "enabled": true
+    },
+    "playwright-a": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp", "--headless", "--user-data-dir", "C:\\Users\\aariz\\.cache\\kilo\\playwright-a"],
+      "enabled": true
+    },
+    "playwright-b": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp", "--headless", "--user-data-dir", "C:\\Users\\aariz\\.cache\\kilo\\playwright-b"],
+      "enabled": true
+    },
+    "playwright-c": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp", "--headless", "--user-data-dir", "C:\\Users\\aariz\\.cache\\kilo\\playwright-c"],
+      "enabled": true
+    },
+    "playwright-d": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp", "--headless", "--user-data-dir", "C:\\Users\\aariz\\.cache\\kilo\\playwright-d"],
+      "enabled": true
+    },
+    "playwright-e": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp", "--headless", "--user-data-dir", "C:\\Users\\aariz\\.cache\\kilo\\playwright-e"],
+      "enabled": true
+    },
+    "unlimited-research": {
+      "type": "local",
+      "command": ["python", "C:\\Users\\aariz\\kilo_HQ\\unlimited-research-engine\\engine\\mcp_research_server.py"],
+      "enabled": true
+    }
+  },
+  "permission": {
+    "read": "allow", "edit": "allow", "glob": "allow", "grep": "allow", "list": "allow",
+    "bash": "allow", "task": "allow", "webfetch": "allow", "websearch": "allow",
+    "semantic_search": "allow", "codebase_search": "allow", "kilo_memory_save": "allow",
+    "kilo_memory_recall": "allow", "lsp": "allow", "skill": "allow",
+    "external_directory": "allow", "todowrite": "allow", "todoread": "allow",
+    "question": "allow", "doom_loop": "allow", "suggest": "allow",
+    "interactive_terminal": "allow", "plan_enter": "allow", "plan_exit": "allow",
+    "repo_clone": "allow", "repo_overview": "allow", "recall": "allow",
+    "playwright_*": "allow", "playwright-a_*": "allow", "playwright-b_*": "allow",
+    "playwright-c_*": "allow", "playwright-d_*": "allow", "playwright-e_*": "allow",
+    "unlimited-research_*": "allow", "agentmemory_*": "allow",
+    "*": { "*": "allow" }
+  }
+}

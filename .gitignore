@@ -1,0 +1,42 @@
+# Secrets — never commit
+*.env
+.env
+.env.*
+secrets*
+*credentials*
+*.key
+*.pem
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+.github/workflows/*token*
+
+# Runtime
+.team/
+outbox/
+inbox/
+*.log
+*.tmp
+mcp-in.json
+mcp-out.json
+mcp-err.txt
+
+# Caches / node / python
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+.searxng/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local overrides
+kilo.local.json
+kilo.local.jsonc
+config.local/
