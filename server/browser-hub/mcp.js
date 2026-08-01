@@ -23,6 +23,15 @@ export function resolvePlaywright() {
 }
 
 const CRLFCRLF = Buffer.from('\r\n\r\n');
+const LFLF = Buffer.from('\n\n');
+
+function findHeaderEnd(buf) {
+  const crlf = buf.indexOf(CRLFCRLF);
+  const lf = buf.indexOf(LFLF);
+  if (crlf === -1) return lf === -1 ? null : { idx: lf, sep: 2 };
+  if (lf === -1) return { idx: crlf, sep: 4 };
+  return crlf < lf ? { idx: crlf, sep: 4 } : { idx: lf, sep: 2 };
+}
 
 export class McpServer {
   constructor({ name, version, tools, log, verbose = false, toolTimeout = 25000 }) {
@@ -33,6 +42,8 @@ export class McpServer {
     this.verbose = !!verbose;
     this.toolTimeout = toolTimeout;
     this.buf = Buffer.alloc(0);
+    this.outSep = '\r\n\r\n';
+    this.jsonl = false;
     this.lastActivity = Date.now();
     this.onActivity = null;
   }
@@ -56,21 +67,47 @@ export class McpServer {
   _onData(chunk) {
     this.buf = Buffer.concat([this.buf, chunk]);
     for (;;) {
-      const idx = this.buf.indexOf(CRLFCRLF);
-      if (idx === -1) return;
-      const header = this.buf.slice(0, idx).toString('utf8');
-      const match = /Content-Length:\s*(\d+)/i.exec(header);
-      if (!match) {
-        this.buf = this.buf.slice(idx + 4);
+      let i = 0;
+      while (i < this.buf.length && (this.buf[i] === 0x20 || this.buf[i] === 0x0a || this.buf[i] === 0x0d)) i++;
+      if (i > 0) this.buf = this.buf.slice(i);
+      if (this.buf.length === 0) return;
+
+      const head = this.buf.slice(0, 15).toString('utf8').toLowerCase();
+      if (head.startsWith('content-length:')) {
+        const headerEnd = findHeaderEnd(this.buf);
+        if (!headerEnd) return;
+        const header = this.buf.slice(0, headerEnd.idx).toString('utf8');
+        const match = /Content-Length:\s*(\d+)/i.exec(header);
+        if (!match) {
+          this.buf = this.buf.slice(headerEnd.idx + headerEnd.sep);
+          continue;
+        }
+        const len = parseInt(match[1], 10);
+        if (this.buf.length < headerEnd.idx + headerEnd.sep + len) return;
+        const body = this.buf.slice(headerEnd.idx + headerEnd.sep, headerEnd.idx + headerEnd.sep + len);
+        this.buf = this.buf.slice(headerEnd.idx + headerEnd.sep + len);
+        this.outSep = headerEnd.sep === 2 ? '\n\n' : '\r\n\r\n';
+        this.jsonl = false;
+        let msg;
+        try {
+          msg = JSON.parse(body.toString('utf8'));
+        } catch (err) {
+          this._send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: `Parse error: ${err.message}` } });
+          continue;
+        }
+        this._handle(msg);
         continue;
       }
-      const len = parseInt(match[1], 10);
-      if (this.buf.length < idx + 4 + len) return;
-      const body = this.buf.slice(idx + 4, idx + 4 + len);
-      this.buf = this.buf.slice(idx + 4 + len);
+
+      const nl = this.buf.indexOf(0x0a);
+      if (nl === -1) return;
+      const line = this.buf.slice(0, nl).toString('utf8').trim();
+      this.buf = this.buf.slice(nl + 1);
+      if (!line) continue;
+      this.jsonl = true;
       let msg;
       try {
-        msg = JSON.parse(body.toString('utf8'));
+        msg = JSON.parse(line);
       } catch (err) {
         this._send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: `Parse error: ${err.message}` } });
         continue;
@@ -83,7 +120,7 @@ export class McpServer {
     let out;
     try {
       const json = JSON.stringify(msg);
-      out = `Content-Length: ${Buffer.byteLength(json, 'utf8')}\r\n\r\n${json}`;
+      out = this.jsonl ? `${json}\n` : `Content-Length: ${Buffer.byteLength(json, 'utf8')}${this.outSep}${json}`;
     } catch (err) {
       out = `Content-Length: 0\r\n\r\n`;
     }
