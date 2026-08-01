@@ -19,8 +19,25 @@ const ENV = {
   TOOL_CAP: Math.min(parseInt(process.env.ACX_TOOL_TIMEOUT || '25000', 10), 28000),
   IDLE_MS: parseInt(process.env.ACX_IDLE_MS || String(30 * 60 * 1000), 10),
   CHANNEL: process.env.ACX_CHANNEL || 'auto',
+  LAUNCH_CAP: parseInt(process.env.ACX_LAUNCH_CAP || '22000', 10),
+  RETRY_MS: parseInt(process.env.ACX_LAUNCH_RETRY_MS || '10000', 10),
+  MAX_ATTEMPTS: parseInt(process.env.ACX_LAUNCH_ATTEMPTS || '3', 10),
   VERBOSE: /^(1|true|yes)$/i.test(process.env.ACX_VERBOSE || '0'),
 };
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function bound(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 const LOCK_FILE = path.join(ENV.PROFILE_DIR, 'hub.lock');
 
@@ -38,20 +55,19 @@ function isProcessAlive(pid) {
   }
 }
 
-function acquireLock() {
+function tryAcquireLock() {
   try {
     fs.mkdirSync(ENV.PROFILE_DIR, { recursive: true });
     if (fs.existsSync(LOCK_FILE)) {
       const pid = parseInt(fs.readFileSync(LOCK_FILE, 'utf8'), 10);
-      if (isProcessAlive(pid)) {
-        log(`ERROR: browser profile is locked by another live hub (PID ${pid}). Kill it (Stop-Process -Id ${pid} -Force) or set ACX_PROFILE_DIR to another directory, then retry.`);
-        process.exit(2);
-      }
+      if (isProcessAlive(pid)) return false;
       log(`stale lock (PID ${pid}) from a dead hub - taking over`);
     }
     fs.writeFileSync(LOCK_FILE, String(process.pid));
+    return true;
   } catch (err) {
     log(`lock warning: ${err.message}`);
+    return true;
   }
 }
 
@@ -162,27 +178,61 @@ async function main() {
   log(`profile=${ENV.PROFILE_DIR}`);
   log(`team dir=${ENV.TEAM_DIR}`);
   log(`headed=${ENV.HEADED} channel=${ENV.CHANNEL} timeout=${ENV.TIMEOUT}ms toolCap=${ENV.TOOL_CAP}ms idle=${Math.round(ENV.IDLE_MS / 60000)}min`);
-
-  acquireLock();
+  log(`launch: cap=${ENV.LAUNCH_CAP}ms retry=${ENV.RETRY_MS}ms attempts=${ENV.MAX_ATTEMPTS}`);
 
   const { boardPath, screenshotsDir } = ensureBoard(ENV.TEAM_DIR);
-  const { context, browserName } = await launchBrowser();
-  log(`browser launched: ${browserName}, pages: ${context.pages().length}`);
+
+  let closing = false;
+  let context = null;
+  let browserNameLabel = 'launching...';
 
   const ctx = {
-    context,
+    get context() {
+      return browserPromise;
+    },
+    get browserName() {
+      return browserNameLabel;
+    },
     boardPath,
     screenshotsDir,
     teamDir: ENV.TEAM_DIR,
     timeout: ENV.TIMEOUT,
     toolCap: ENV.TOOL_CAP,
     version: '1.0.0',
-    browserName,
     verbose: ENV.VERBOSE,
   };
 
-  attachConsoleCapture(ctx);
-  context.on('page', () => attachConsoleCapture(ctx));
+  const browserPromise = (async () => {
+    for (let attempt = 1; attempt <= ENV.MAX_ATTEMPTS; attempt++) {
+      if (closing) throw new Error('hub shutting down before browser launch completed');
+      if (!tryAcquireLock()) {
+        log(`profile is locked by another live hub - attempt ${attempt}/${ENV.MAX_ATTEMPTS}, retrying in ${ENV.RETRY_MS}ms`);
+        await sleep(ENV.RETRY_MS);
+        continue;
+      }
+      try {
+        const launched = await bound(launchBrowser(), ENV.LAUNCH_CAP, 'browser launch');
+        context = launched.context;
+        browserNameLabel = launched.browserName;
+        log(`browser launched: ${launched.browserName}, pages: ${context.pages().length}`);
+        attachConsoleCapture(ctx);
+        context.on('page', () => attachConsoleCapture(ctx));
+        context.on('close', () => {
+          if (closing) return;
+          log('browser process exited unexpectedly');
+          releaseLock();
+          process.exit(1);
+        });
+        return context;
+      } catch (err) {
+        releaseLock();
+        log(`browser launch attempt ${attempt}/${ENV.MAX_ATTEMPTS} failed: ${err && err.message ? err.message : String(err)}`);
+        if (attempt < ENV.MAX_ATTEMPTS) await sleep(ENV.RETRY_MS);
+      }
+    }
+    browserNameLabel = `unavailable (all ${ENV.MAX_ATTEMPTS} launch attempts failed)`;
+    throw new Error(`browser unavailable after ${ENV.MAX_ATTEMPTS} launch attempts (profile=${ENV.PROFILE_DIR})`);
+  })();
 
   let dashboard;
   try {
@@ -201,29 +251,23 @@ async function main() {
     toolTimeout: ENV.TOOL_CAP,
   });
 
-  let closing = false;
   async function shutdown(code) {
     if (closing) return;
     closing = true;
     log('shutting down...');
     await closeAll();
-    try {
-      await context.close();
-    } catch (err) {
-      log(`context close: ${err.message}`);
+    if (context) {
+      try {
+        await context.close();
+      } catch (err) {
+        log(`context close: ${err.message}`);
+      }
     }
     if (dashboard) dashboard.close();
     releaseLock();
     log('bye');
     process.exit(code);
   }
-
-  context.on('close', () => {
-    if (closing) return;
-    log('browser process exited unexpectedly');
-    releaseLock();
-    process.exit(1);
-  });
 
   let lastTouch = Date.now();
   server.onActivity = () => {

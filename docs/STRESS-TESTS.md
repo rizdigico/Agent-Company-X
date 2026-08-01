@@ -80,7 +80,24 @@ the timeout-bug family that previously caused client-side "Operation timed out a
 
 Run: `node server\browser-hub\test\slow-load.mjs`
 
-### 5. Config/permission audit (verified — 2026-08-01)
+### 5. Connect-first startup (verified — 2026-08-01)
+
+The MCP server now starts before the browser is launched, so `initialize` always
+answers within milliseconds — the client shows "connected" even when the browser is
+still booting or the profile is contended. Launch happens in the background with a hard
+per-attempt cap and bounded retries:
+
+- **`initialize` at 0ms after spawn** — answered in 532ms while the browser was still
+  launching (`hub_status.browser = "launching..."`); `tab_new` succeeds ~4s later once
+  the browser is up.
+- **Profile locked by another live hub** — `initialize` answered in 120ms; board tools
+  work immediately; the hub keeps retrying in the background until the lock frees.
+- **Launch failure is non-fatal** — a hub that cannot start a browser still serves
+  `initialize`/`ping`/`tools/list` and the board tools, and reports the browser as
+  unavailable in `hub_status` instead of timing out the whole session.
+- Lock file, port binding, and process leftovers all verified clean after the runs.
+
+### 6. Config/permission audit (verified — 2026-08-01)
 
 - All agents resolve to ALL ALLOW (no ask/deny) — verified against the live config.
 - The live config contains exactly four MCP servers: `browser-hub`,

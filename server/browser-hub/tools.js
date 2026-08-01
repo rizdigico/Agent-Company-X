@@ -124,7 +124,7 @@ export function createTools(ctx) {
       async run(params) {
         const agent = requireAgent(params);
         const tabKey = opt(params, 'tabKey', null) || 'main';
-        const rec = await createPage(ctx.context, agent, tabKey, opt(params, 'url', null), timeout);
+        const rec = await createPage(await ctx.context, agent, tabKey, opt(params, 'url', null), timeout);
         return { agent, tabKey, url: rec.page.url(), title: await safeTitle(rec.page), warning: rec.warning || null };
       },
     },
@@ -564,9 +564,10 @@ async function safeTitle(page) {
   }
 }
 
-export function attachConsoleCapture(ctx) {
+export async function attachConsoleCapture(ctx) {
   const verbose = !!ctx.verbose;
-  for (const page of ctx.context.pages()) {
+  const context = await ctx.context;
+  for (const page of context.pages()) {
     if (!page.__hubConsole) page.__hubConsole = [];
     page.removeAllListeners('console');
     page.on('console', (msg) => {
