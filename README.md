@@ -1,4 +1,4 @@
-# Riz Multi-Agent Teams System
+# Agent-Company-X System
 
 A general-purpose, model-agnostic **multi-agent teams system** for big projects: research, building, verification, and delivery — fully autonomous, zero permission prompts, with agent-to-agent (A2A) communication and an automatic 100% verification loop.
 
