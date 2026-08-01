@@ -106,6 +106,11 @@ async function main() {
   for (const d of tmpDirs) {
     try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
   }
+  if (useRealEnv) {
+    // The hub is hard-killed by client.close(), so its SIGTERM handler never runs;
+    // remove the profile lock it left behind (next launch would take it over anyway).
+    try { fs.rmSync(path.join(env.ACX_PROFILE_DIR, 'hub.lock'), { force: true }); } catch {}
+  }
   if (ok) console.log('\nINSTALL VERIFIED');
   else console.log('\nINSTALL CHECK FAILED');
   process.exit(ok ? 0 : 1);
